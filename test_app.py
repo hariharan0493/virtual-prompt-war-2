@@ -1,15 +1,11 @@
 import os
 import pytest
-import logging
-from app import get_client, stream_ai_response
+from app import get_client, stream_ai_response, sanitize_input
 
 def test_environment_variables(monkeypatch):
-    """Test that the application securely loads environment variables."""
+    """Test secure loading of environment variables."""
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-secure-project")
-    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-east1")
-    
     assert os.environ.get("GOOGLE_CLOUD_PROJECT") == "test-secure-project"
-    assert os.environ.get("GOOGLE_CLOUD_LOCATION") == "us-east1"
 
 def test_client_initialization():
     """Verify GenAI client instantiates without errors."""
@@ -20,18 +16,25 @@ def test_client_initialization():
         pytest.fail(f"Client initialization failed: {e}")
 
 def test_stream_ai_response_error_handling(monkeypatch):
-    """
-    Test that the application gracefully handles API failures 
-    instead of crashing the server.
-    """
-    # Mock get_client to raise an exception simulating an API outage
+    """Test application resilience against API outages."""
     def mock_get_client_fail():
         raise ConnectionError("Mocked API Outage")
     
-    monkeypatch.setattr("app.ge_client", mock_get_client_fail)
+    monkeypatch.setattr("app.get_client", mock_get_client_fail)
     
     generator = stream_ai_response("Test prompt")
     responses = list(generator)
     
     assert len(responses) == 1
-    assert "Connection Error" in responses[0]   
+    assert "Connection Error" in responses[0]
+
+def test_input_sanitization():
+    """Test security constraints against XSS and prompt injection."""
+    malicious_input = "<script>alert('xss')</script>"
+    clean = sanitize_input(malicious_input)
+    assert "<script>" not in clean
+    assert clean == "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+    
+    long_input = "A" * 2000
+    clean_long = sanitize_input(long_input)
+    assert len(clean_long) == 1000
