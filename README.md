@@ -1,4 +1,4 @@
-# 🗳️ Election AI
+# 🗳️ CivicMind AI
 
 An intelligent assistant that helps users understand the election process in a simple, interactive, and structured way.
 
