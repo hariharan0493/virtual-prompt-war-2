@@ -1,163 +1,107 @@
+import os
+import logging
 import streamlit as st
+from typing import Generator
 from google import genai
-from google.genai.types import HttpOptions
-import time
-
-# ---------------- CONFIG ----------------
-st.set_page_config(page_title="CivicMind AI", layout="wide")
-
-# ---------------- CLEAN BLACK UI ----------------
-st.markdown("""
-<style>
-#MainMenu, footer, header {visibility:hidden;}
-section[data-testid="stSidebar"] {display:none;}
-
-.stApp {
-    background-color: #000000;
-    color: #e5e5e5;
-}
-
-/* Title */
-.title {
-    text-align: center;
-    font-size: 30px;
-    font-weight: 600;
-    margin-top: -100px;
-    margin-bottom: 30px;
-}
-
-/* Chat container */
-.chat-container {
-    max-width: 850px;
-    margin: auto;
-    padding-bottom: 120px;
-}
-
-/* Messages */
-.msg {
-    padding: 12px 14px;
-    border-radius: 10px;
-    margin: 8px 0;
-    font-size: 15px;
-}
-
-.user {
-    background-color: #111;
-    text-align: right;
-}
-
-.bot {
-    background-color: #0a0a0a;
-}
-
-/* Chat input */
-[data-testid="stChatInput"] {
-    position: fixed;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 60%;
-}
-
-/* Typing dots */
-.dot {
-    height: 6px;
-    width: 6px;
-    margin: 2px;
-    background-color: white;
-    border-radius: 50%;
-    display: inline-block;
-    animation: bounce 1.2s infinite;
-}
-
-.dot:nth-child(2){animation-delay:0.2s;}
-.dot:nth-child(3){animation-delay:0.4s;}
-
-@keyframes bounce {
-    0%,80%,100%{transform:scale(0.5);}
-    40%{transform:scale(1);}
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ---------------- TITLE ----------------
-st.markdown('<div class="title">🗳️ Understand Elections with AI</div>', unsafe_allow_html=True)
-
-# ---------------- AI CLIENT ----------------
-client = genai.Client(
-    vertexai=True,
-    project="ai-project-495106",
-    location="us-central1",
-    http_options=HttpOptions(api_version="v1")
+from google.genai.types import (
+    HttpOptions, 
+    GenerateContentConfig, 
+    HarmCategory, 
+    HarmBlockThreshold
 )
 
-# ---------------- STATE ----------------
+# ---------------- LOGGING & CONFIG ----------------
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+st.set_page_config(page_title="ClearVote AI", page_icon="🗳️", layout="centered")
+
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "ai-project-495106")
+LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+# ---------------- API INITIALIZATION ----------------
+@st.cache_resource
+def get_client() -> genai.Client:
+    """Initializes and caches the Google Vertex AI GenAI client."""
+    logger.info("Initializing Vertex AI Client.")
+    return genai.Client(
+        vertexai=True,
+        project=PROJECT_ID,
+        location=LOCATION,
+        http_options=HttpOptions(api_version="v1")
+    )
+
+def stream_ai_response(prompt: str) -> Generator[str, None, None]:
+    """
+    Streams the response from Gemini, applying strict system instructions 
+    and safety settings for responsible AI deployment.
+    """
+    try:
+        # Moved inside the try block to catch initialization failures
+        client = get_client()
+        
+        # Advanced Google Services: System Instructions & Safety Settings
+        config = GenerateContentConfig(
+            system_instruction="You are an expert on elections and civic processes. Only answer questions related to elections. If asked about unrelated topics, politely redirect to elections.",
+            temperature=0.3, # Lower temperature for factual, grounded civic answers
+            safety_settings=[
+                {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE},
+                {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE},
+            ]
+        )
+        
+        logger.info(f"Generating content for prompt length: {len(prompt)}")
+        response_stream = client.models.generate_content_stream(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=config
+        )
+        for chunk in response_stream:
+            if chunk.text:
+                yield chunk.text
+    except Exception as e:
+        logger.error(f"API Connection Error: {str(e)}")
+        yield "⚠️ **Connection Error:** Unable to reach the AI service. Please try again later."
+# ---------------- UI & STATE MANAGEMENT ----------------
+st.title("🗳️ ClearVote AI")
+st.markdown("An intelligent assistant simplifying electoral processes, rules, and terminology.")
+
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Welcome. Ask anything about elections."}
+        {"role": "assistant", "content": "Welcome. What would you like to know about the electoral process?"}
     ]
 
-if "last_prompt" not in st.session_state:
-    st.session_state.last_prompt = ""
+# Problem Alignment: Starter questions to guide the user
+st.sidebar.title("📌 Try Asking:")
+starter_prompts = [
+    "How does the Electoral College work?",
+    "What is the difference between a primary and a caucus?",
+    "Explain gerrymandering simply."
+]
 
-# ---------------- FUNCTION ----------------
-def get_ai_response(prompt):
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-    )
-    return response.text
+for starter in starter_prompts:
+    if st.sidebar.button(starter):
+        st.session_state.starter_trigger = starter
 
-# ---------------- CHAT DISPLAY ----------------
-st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-
+# Render existing conversation history using accessible native components
 for msg in st.session_state.messages:
-    role_class = "user" if msg["role"] == "user" else "bot"
-    st.markdown(
-        f'<div class="msg {role_class}">{msg["content"]}</div>',
-        unsafe_allow_html=True
-    )
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-st.markdown('</div>', unsafe_allow_html=True)
-
-# ---------------- INPUT ----------------
+# ---------------- INPUT HANDLING ----------------
+# Check if input came from a sidebar starter prompt OR the chat input
 user_input = st.chat_input("Ask about elections...")
+if getattr(st.session_state, 'starter_trigger', None):
+    user_input = st.session_state.starter_trigger
+    st.session_state.starter_trigger = None # Reset after use
 
 if user_input:
-    st.session_state.last_prompt = user_input
     st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
 
-    # Typing animation
-    placeholder = st.empty()
-    placeholder.markdown("""
-    <div style='text-align:center'>
-        <span class="dot"></span>
-        <span class="dot"></span>
-        <span class="dot"></span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    response = get_ai_response(user_input)
-    placeholder.empty()
-
-    # Streaming effect
-    full = ""
-    msg_placeholder = st.empty()
-
-    for char in response:
-        full += char
-        msg_placeholder.markdown(
-            f'<div class="msg bot">{full}</div>',
-            unsafe_allow_html=True
-        )
-        time.sleep(0.003)
-
-    st.session_state.messages.append({"role": "assistant", "content": response})
-    st.rerun()
-
-# ---------------- REGENERATE ----------------
-if st.session_state.last_prompt:
-    if st.button("🔄 Regenerate"):
-        response = get_ai_response(st.session_state.last_prompt)
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        st.rerun()
+    with st.chat_message("assistant"):
+        response_stream = stream_ai_response(user_input)
+        full_response = st.write_stream(response_stream)
+        
+    st.session_state.messages.append({"role": "assistant", "content": full_response})
